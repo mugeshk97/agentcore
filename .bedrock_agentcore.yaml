@@ -1,0 +1,62 @@
+default_agent: alpha
+agents:
+  alpha:
+    name: alpha
+    language: python
+    node_version: '20'
+    entrypoint: /home/mugesh/Project/agentcore/main.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: /home/mugesh/Project/agentcore
+    aws:
+      execution_role: arn:aws:iam::622004253969:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-8ed3f6ad68
+      execution_role_auto_create: false
+      account: '622004253969'
+      region: us-east-1
+      ecr_repository: 622004253969.dkr.ecr.us-east-1.amazonaws.com/bedrock-agentcore-alpha
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: alpha-8FJKWu7Xqm
+      agent_arn: arn:aws:bedrock-agentcore:us-east-1:622004253969:runtime/alpha-8FJKWu7Xqm
+      agent_session_id: null
+    codebuild:
+      project_name: bedrock-agentcore-alpha-builder
+      execution_role: arn:aws:iam::622004253969:role/AmazonBedrockAgentCoreSDKCodeBuild-us-east-1-8ed3f6ad68
+      source_bucket: bedrock-agentcore-codebuild-sources-622004253969-us-east-1
+    memory:
+      mode: STM_AND_LTM
+      memory_id: alpha_memory-cQMHNRHuNG
+      memory_arn: arn:aws:bedrock-agentcore:us-east-1:622004253969:memory/alpha_memory-cQMHNRHuNG
+      memory_name: alpha_memory
+      event_expiry_days: 90
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
