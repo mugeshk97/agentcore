@@ -3,17 +3,19 @@
 import os
 import uuid
 import logging
+from typing import Generator
 
+import boto3
 import httpx
 from a2a.client import ClientConfig
 from bedrock_agentcore import BedrockAgentCoreApp
 from bedrock_agentcore.memory import MemoryClient
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 from strands_tools.agent_core_memory import AgentCoreMemoryToolProvider
 from strands.agent.a2a_agent import A2AAgent
 from strands.models import BedrockModel
 from strands import Agent, tool
-
-from shared.a2a_tools import SigV4HttpxAuth, make_a2a_tool
 
 
 os.environ.setdefault("AWS_REGION", "us-east-1")
@@ -23,6 +25,40 @@ MEMORY_ID = os.environ.get("MEMORY_ID", "alpha_memory-cQMHNRHuNG")
 
 KB_SPECIALIST_URL   = os.environ.get("KB_SPECIALIST_URL",   "http://127.0.0.1:9000/")
 MATH_SPECIALIST_URL = os.environ.get("MATH_SPECIALIST_URL", "http://127.0.0.1:9001/")
+
+
+class SigV4HttpxAuth(httpx.Auth):
+    """Signs each outbound httpx request with AWS SigV4.
+
+    Credentials resolve lazily per call via boto3.Session — picks up
+    rotating task-role creds in AgentCore without caching or refresh.
+    """
+
+    requires_request_body = True
+
+    def __init__(self, service: str, region: str) -> None:
+        self._service = service
+        self._region = region
+        self._session = boto3.Session()
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response, None]:
+        body = request.read()
+        aws_request = AWSRequest(
+            method=request.method,
+            url=str(request.url),
+            data=body,
+            headers={k: v for k, v in request.headers.items()},
+        )
+        credentials = self._session.get_credentials()
+        if credentials is None:
+            raise RuntimeError("No AWS credentials available for SigV4 signing")
+        frozen = credentials.get_frozen_credentials()
+        SigV4Auth(frozen, self._service, self._region).add_auth(aws_request)
+        for header_name, header_value in aws_request.headers.items():
+            request.headers[header_name] = header_value
+        yield request
 
 _kb_http_client = httpx.AsyncClient(
     auth=(
@@ -40,33 +76,33 @@ _kb_agent = A2AAgent(
 )
 
 
-@tool(
-    name="ask_kb_specialist",
-    description=(
-        "Delegate factual questions to the KB specialist. Use this "
-        "whenever the user is asking for information that could be in "
-        "a documented knowledge base."
-    ),
-)
-async def ask_kb_specialist(query: str) -> str:
-    try:
-        result = await _kb_agent.invoke_async(query)
-        return str(result.message["content"][0]["text"])
-    except Exception as exc:  # noqa: BLE001 - surface to LLM
-        logger.exception("ask_kb_specialist via A2AAgent failed")
-        return f"Specialist ask_kb_specialist call failed: {exc}"
+@tool
+def ask_kb_specialist(query: str) -> str:
+    """Delegate factual questions to the KB specialist. Use whenever the user is asking for information that could be in a documented knowledge base."""
+    result = _kb_agent(query)
+    return str(result.message["content"][0]["text"])
 
-ask_math_specialist = make_a2a_tool(
-    tool_name="ask_math_specialist",
-    tool_description=(
-        "Delegate arithmetic or math expression evaluation to the math "
-        "specialist. Use this whenever a numeric calculation is required."
+_math_http_client = httpx.AsyncClient(
+    auth=(
+        SigV4HttpxAuth("bedrock-agentcore", REGION)
+        if MATH_SPECIALIST_URL.startswith("https://")
+        else None
     ),
-    remote_name="math_specialist",
-    remote_description="arithmetic & symbolic math",
-    runtime_url=MATH_SPECIALIST_URL,
-    region=REGION,
+    timeout=300.0,
 )
+_math_agent = A2AAgent(
+    endpoint=MATH_SPECIALIST_URL,
+    name="math_specialist",
+    description="arithmetic & symbolic math",
+    client_config=ClientConfig(httpx_client=_math_http_client, streaming=False),
+)
+
+
+@tool
+def ask_math_specialist(query: str) -> str:
+    """Delegate arithmetic or math expression evaluation to the math specialist. Use whenever a numeric calculation is required."""
+    result = _math_agent(query)
+    return str(result.message["content"][0]["text"])
 
 
 def ltm_namespace(actor_id: str) -> str:

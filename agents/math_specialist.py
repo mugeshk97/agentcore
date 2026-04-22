@@ -3,10 +3,9 @@
 import logging
 import os
 
-from bedrock_agentcore.runtime.a2a import serve_a2a
 from strands import Agent
 from strands.models import BedrockModel
-from strands.multiagent.a2a.executor import StrandsA2AExecutor
+from strands.multiagent.a2a import A2AServer
 from strands_tools import calculator
 
 logging.basicConfig(
@@ -16,12 +15,9 @@ logging.basicConfig(
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 
-agent = Agent(
+strands_agent = Agent(
     name="math_specialist",
-    description=(
-        "Evaluates arithmetic and symbolic math expressions. "
-        "Use for calculations, unit arithmetic, and closed-form math."
-    ),
+    description="Evaluates arithmetic and symbolic math expressions.",
     model=BedrockModel(
         model_id="us.amazon.nova-2-lite-v1:0",
         region_name=REGION,
@@ -34,10 +30,13 @@ agent = Agent(
         "line explanation — no commentary."
     ),
     tools=[calculator],
+    callback_handler=None,
 )
-
-executor = StrandsA2AExecutor(agent)
 
 
 if __name__ == "__main__":
-    serve_a2a(executor, port=int(os.environ.get("PORT", "9001")))
+    A2AServer(
+        agent=strands_agent,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "9000")),
+    ).serve()

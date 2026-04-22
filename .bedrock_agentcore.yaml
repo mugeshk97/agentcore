@@ -1,4 +1,4 @@
-default_agent: alpha
+default_agent: math_specialist
 agents:
   alpha:
     name: alpha
@@ -43,6 +43,66 @@ agents:
       memory_arn: arn:aws:bedrock-agentcore:us-east-1:622004253969:memory/alpha_memory-cQMHNRHuNG
       memory_name: alpha_memory
       event_expiry_days: 90
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
+  math_specialist:
+    name: math_specialist
+    language: python
+    node_version: '20'
+    entrypoint: /home/mugesh/Project/agentcore/agents/math_specialist.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: /home/mugesh/Project/agentcore
+    aws:
+      execution_role: arn:aws:iam::622004253969:role/AmazonBedrockAgentCoreSDKRuntime-us-east-1-8024b48908
+      execution_role_auto_create: false
+      account: '622004253969'
+      region: us-east-1
+      ecr_repository: 622004253969.dkr.ecr.us-east-1.amazonaws.com/bedrock-agentcore-math_specialist
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: A2A
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: math_specialist-UaoXVTAOZr
+      agent_arn: arn:aws:bedrock-agentcore:us-east-1:622004253969:runtime/math_specialist-UaoXVTAOZr
+      agent_session_id: null
+    codebuild:
+      project_name: bedrock-agentcore-math_specialist-builder
+      execution_role: arn:aws:iam::622004253969:role/AmazonBedrockAgentCoreSDKCodeBuild-us-east-1-8024b48908
+      source_bucket: bedrock-agentcore-codebuild-sources-622004253969-us-east-1
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
       first_invoke_memory_check_done: false
       was_created_by_toolkit: false
     identity:

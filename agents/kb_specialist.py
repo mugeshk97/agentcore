@@ -3,10 +3,9 @@
 import logging
 import os
 
-from bedrock_agentcore.runtime.a2a import serve_a2a
 from strands import Agent
 from strands.models import BedrockModel
-from strands.multiagent.a2a.executor import StrandsA2AExecutor
+from strands.multiagent.a2a import A2AServer
 from strands_tools import retrieve
 
 os.environ.setdefault("KNOWLEDGE_BASE_ID", "GLSSIBXSBD")
@@ -20,7 +19,7 @@ logging.basicConfig(
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 
-agent = Agent(
+strands_agent = Agent(
     name="kb_specialist",
     description=(
         "Answers factual questions grounded in the Bedrock Knowledge "
@@ -38,10 +37,13 @@ agent = Agent(
         "explicitly — do not speculate."
     ),
     tools=[retrieve],
+    callback_handler=None,
 )
-
-executor = StrandsA2AExecutor(agent)
 
 
 if __name__ == "__main__":
-    serve_a2a(executor, port=int(os.environ.get("PORT", "9000")))
+    A2AServer(
+        agent=strands_agent,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "9000")),
+    ).serve()
