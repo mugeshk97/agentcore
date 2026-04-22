@@ -9,6 +9,9 @@ Package management is via `uv` (lockfile: `uv.lock`, Python 3.12 pinned in `.pyt
 - Install/sync deps: `uv sync`
 - Add a dep: `uv add <pkg>`
 - Run locally: `uv run main.py` — starts the AgentCore HTTP server on port 8080 that mimics the production runtime contract.
+- Run specialist locally: `uv run python -m agents.kb_specialist` (port 9000) / `uv run python -m agents.math_specialist` (port 9001)
+- Run coordinator against local specialists: `KB_SPECIALIST_URL=http://127.0.0.1:9000/ MATH_SPECIALIST_URL=http://127.0.0.1:9001/ uv run python main.py`
+- Invoke a deployed specialist: `uv run python -c "import boto3, json; c=boto3.client('bedrock-agentcore', region_name='us-east-1'); r=c.invoke_agent_runtime(agentRuntimeArn='<arn>', payload=json.dumps({'jsonrpc':'2.0','id':'1','method':'message/send','params':{'message':{'kind':'message','role':'user','messageId':'t','parts':[{'kind':'text','text':'ping'}]}}}).encode()); print(r['response'].read().decode())"`
 - Invoke locally: `curl -X POST http://localhost:8080/invocations -H 'Content-Type: application/json' -d '{"prompt": "..."}'`
 - Deploy to AWS: `uv run agentcore launch` — CodeBuild builds an ARM64 container, pushes to ECR, and updates the runtime (agent name `alpha`, account/region pinned in `.bedrock_agentcore.yaml`).
 - Invoke deployed runtime: `uv run agentcore invoke '{"prompt": "..."}'`
@@ -16,11 +19,15 @@ Package management is via `uv` (lockfile: `uv.lock`, Python 3.12 pinned in `.pyt
 
 ## Architecture
 
-Single-file app (`main.py`) stitching three layers:
+Three-runtime deployment (see `docs/superpowers/specs/2026-04-21-multi-agent-a2a-on-agentcore-design.md`):
 
-1. **Bedrock AgentCore runtime** (`bedrock_agentcore.BedrockAgentCoreApp`) — AWS's hosting shim. `@app.entrypoint` registers the handler the managed runtime invokes; `app.run()` starts the local HTTP server with the same contract. The deployed container's CMD is `python -m main`, so the `if __name__ == "__main__": app.run()` block is required — without it, the container exits immediately and no logs are written.
-2. **Strands agent** (`strands.Agent`) — agent loop, tool dispatch, model call cycle.
-3. **Bedrock model** (`strands.models.BedrockModel`, currently `us.amazon.nova-2-lite-v1:0`) — inference via the same AWS account; the runtime execution role's IAM creds handle auth, so no API key is needed.
+1. **Coordinator** (`main.py`, runtime name `alpha`) — HTTP protocol; user-facing; owns STM/LTM memory; delegates to specialists via two A2A tools built by `shared/a2a_tools.make_a2a_tool`.
+2. **kb_specialist** (`agents/kb_specialist.py`, runtime name `kb_specialist`) — A2A protocol; wraps `strands.Agent` with `strands_tools.retrieve`; stateless.
+3. **math_specialist** (`agents/math_specialist.py`, runtime name `math_specialist`) — A2A protocol; wraps `strands.Agent` with `strands_tools.calculator`; stateless.
+
+Coordinator → specialist calls go over standard A2A JSON-RPC, signed with AWS SigV4 (`shared.a2a_tools.SigV4HttpxAuth`). The coordinator hand-builds a minimal `AgentCard` per specialist (no `/.well-known/agent-card.json` discovery) to sidestep an unverified data-plane path.
+
+The specialists' URLs are injected at deploy time via `--env KB_SPECIALIST_URL=...` / `--env MATH_SPECIALIST_URL=...`; locally they default to `http://127.0.0.1:9000/` and `http://127.0.0.1:9001/`.
 
 The agent and model are constructed **inside** `invoke_agent` on every request, so there is no cross-request state. If you add caching, memory, or long-lived resources, lift them out of the entrypoint.
 
@@ -87,3 +94,7 @@ If `agentcore launch` reuses a pre-existing runtime role from a prior SDK versio
 - **Runtime ARN drift.** `.bedrock_agentcore.yaml`'s `agent_id`/`agent_arn` and `app.py`'s `AGENT_ARN` can diverge from the real runtime. Verify against `list-agent-runtimes` before debugging invoke failures.
 - **Always set `level=` on `basicConfig`.** Default is `WARNING`, which hides `logger.info`/`.debug` in CloudWatch. Pick `INFO` or `DEBUG` explicitly; `DEBUG` at root turns on verbose boto3/botocore logs too, so prefer `INFO` at root and selectively `DEBUG` the module logger if you need memory breadcrumbs without the HTTP noise.
 - **Observability gap for direct memory calls.** Only the `agent_core_memory` *tool* emits OTel spans visible in the observability panel. Direct `MemoryClient.create_event` / `retrieve_memories` / `get_last_k_turns` calls show up only as raw `logger.*` output in CloudWatch Logs — debug them there, not in the trace view.
+- **Specialist URLs must end in `/`.** The a2a-sdk builds the JSON-RPC path relative to this URL. `http://127.0.0.1:9000` (no slash) routes wrong.
+- **SigV4 requires credentials.** If the coordinator container's task role lacks `bedrock-agentcore:InvokeAgentRuntime` on the specialist ARN, the specialist call returns a 403 wrapped as `Specialist <name> call failed: ...` — check the coordinator role's inline policy.
+- **AgentCard discovery is disabled in v1.** The coordinator builds a stub AgentCard in-process; it does **not** call `GET /.well-known/agent-card.json`. If you see unexpected 404s in specialist CloudWatch for `.well-known` paths, a client somewhere (possibly `strands_tools.A2AClientToolProvider`) is doing discovery that v1 avoided on purpose.
+- **Memory still lives only in the coordinator.** Specialists are stateless; do not add `MemoryClient` calls to them without also scoping a new memory resource and updating the coordinator's behavior.
