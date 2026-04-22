@@ -1,9 +1,4 @@
-
-"""math_specialist — A2A-protocol AgentCore runtime.
-
-Wraps a Strands agent (Nova Lite + strands_tools.calculator) as an A2A
-server via serve_a2a(). Stateless — no memory, no KB.
-"""
+"""math_specialist — A2A runtime. Stateless."""
 
 import logging
 import os

@@ -1,9 +1,4 @@
-"""kb_specialist — A2A-protocol AgentCore runtime.
-
-Wraps a Strands agent (Nova Lite + strands_tools.retrieve) as an A2A
-server via serve_a2a(). Stateless — no memory. Answers strictly from
-the Bedrock Knowledge Base configured at module load.
-"""
+"""kb_specialist — A2A runtime. Stateless. Answers from Bedrock KB."""
 
 import logging
 import os

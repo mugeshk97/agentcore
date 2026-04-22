@@ -1,37 +1,22 @@
-"""
-AgentCore alpha runtime — main.py
-
-Architecture:
-  BedrockAgentCoreApp  →  Strands Agent  →  Bedrock Nova model
-                               ↕
-                       AgentCore Memory (STM + LTM)
-
-Memory best-practices applied:
-  - MemoryClient singleton at module level (stateless, thread-safe)
-  - `get_last_k_turns()` for proper STM turn-grouped history (not raw list_events)
-  - `retrieve_memories()` for LTM semantic retrieval before each response
-  - `create_event()` to persist each turn to STM after responding
-  - `AgentCoreMemoryToolProvider` gives the agent proactive record/retrieve tools
-  - Memory strategies (userPreferences + conversationFacts) enable async LTM extraction
-  - `session_id` from context (runtime) or payload (local dev); `actor_id` from payload
-"""
+"""Coordinator runtime: HTTP entrypoint, memory (STM+LTM), A2A delegation."""
 
 import os
 import uuid
 import logging
 
+import httpx
+from a2a.client import ClientConfig
 from bedrock_agentcore import BedrockAgentCoreApp
 from bedrock_agentcore.memory import MemoryClient
 from strands_tools.agent_core_memory import AgentCoreMemoryToolProvider
+from strands.agent.a2a_agent import A2AAgent
 from strands.models import BedrockModel
-from strands import Agent
+from strands import Agent, tool
 
-from shared.a2a_tools import make_a2a_tool
+from shared.a2a_tools import SigV4HttpxAuth, make_a2a_tool
 
 
-os.environ.setdefault("KNOWLEDGE_BASE_ID", "GLSSIBXSBD")
 os.environ.setdefault("AWS_REGION", "us-east-1")
-os.environ.setdefault("MIN_SCORE", "0.3")
 
 REGION    = os.environ.get("AWS_REGION", "us-east-1")
 MEMORY_ID = os.environ.get("MEMORY_ID", "alpha_memory-cQMHNRHuNG")
@@ -39,18 +24,37 @@ MEMORY_ID = os.environ.get("MEMORY_ID", "alpha_memory-cQMHNRHuNG")
 KB_SPECIALIST_URL   = os.environ.get("KB_SPECIALIST_URL",   "http://127.0.0.1:9000/")
 MATH_SPECIALIST_URL = os.environ.get("MATH_SPECIALIST_URL", "http://127.0.0.1:9001/")
 
-ask_kb_specialist = make_a2a_tool(
-    tool_name="ask_kb_specialist",
-    tool_description=(
+_kb_http_client = httpx.AsyncClient(
+    auth=(
+        SigV4HttpxAuth("bedrock-agentcore", REGION)
+        if KB_SPECIALIST_URL.startswith("https://")
+        else None
+    ),
+    timeout=300.0,
+)
+_kb_agent = A2AAgent(
+    endpoint=KB_SPECIALIST_URL,
+    name="kb_specialist",
+    description="KB-grounded factual Q&A",
+    client_config=ClientConfig(httpx_client=_kb_http_client, streaming=False),
+)
+
+
+@tool(
+    name="ask_kb_specialist",
+    description=(
         "Delegate factual questions to the KB specialist. Use this "
         "whenever the user is asking for information that could be in "
         "a documented knowledge base."
     ),
-    remote_name="kb_specialist",
-    remote_description="KB-grounded factual Q&A",
-    runtime_url=KB_SPECIALIST_URL,
-    region=REGION,
 )
+async def ask_kb_specialist(query: str) -> str:
+    try:
+        result = await _kb_agent.invoke_async(query)
+        return str(result.message["content"][0]["text"])
+    except Exception as exc:  # noqa: BLE001 - surface to LLM
+        logger.exception("ask_kb_specialist via A2AAgent failed")
+        return f"Specialist ask_kb_specialist call failed: {exc}"
 
 ask_math_specialist = make_a2a_tool(
     tool_name="ask_math_specialist",
@@ -65,11 +69,10 @@ ask_math_specialist = make_a2a_tool(
 )
 
 
-# Pattern: actor/{actorId}/sessions 
 def ltm_namespace(actor_id: str) -> str:
     return f"actor/{actor_id}/sessions"
 
-# ── logging ──────────────────────────────────────────────────────────────────
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s | %(name)s | %(message)s",
@@ -86,18 +89,8 @@ app = BedrockAgentCoreApp()
 
 @app.entrypoint
 def invoke_agent(payload, context):
-    """
-    Main entrypoint invoked per /invocations request.
-
-    context.session_id — set by the managed runtime per conversation.
-    payload.session_id — fallback for local dev (lets you pin a session across curls).
-    payload.actor_id   — identifies the user for LTM (cross-session recall).
-    payload.prompt     — the user message.
-    """
     prompt    = payload.get("prompt", "")
     actor_id  = payload.get("actor_id", "default-user")
-    # Production: runtime injects session_id via context.
-    # Local dev: pass "session_id" in the payload to reuse a session across calls.
     session_id = (
         (context.session_id if context and context.session_id else None)
         or payload.get("session_id")
@@ -107,7 +100,6 @@ def invoke_agent(payload, context):
 
     logger.info("invoke_agent | session=%s actor=%s", session_id, actor_id)
 
-    # ── 1. Retrieve LTM context (cross-session long-term memories) ────────────
     ltm_context = ""
     try:
         memories = memory_client.retrieve_memories(
@@ -128,14 +120,13 @@ def invoke_agent(payload, context):
     except Exception as e:
         logger.warning("LTM retrieval failed (non-fatal): %s", e)
 
-    # ── 2. Retrieve STM conversation history (current session) ────────────────
     stm_history = ""
     try:
         turns = memory_client.get_last_k_turns(
             memory_id=MEMORY_ID,
             actor_id=actor_id,
             session_id=session_id,
-            k=10,  # last 10 turns (20 messages)
+            k=10,
         )
         if turns:
             lines = []
@@ -151,16 +142,14 @@ def invoke_agent(payload, context):
     except Exception as e:
         logger.warning("STM retrieval failed (non-fatal): %s", e)
 
-    # ── 3. Build memory tool provider (per-request, session-scoped) ───────────
     memory_provider = AgentCoreMemoryToolProvider(
         memory_id=MEMORY_ID,
         actor_id=actor_id,
         session_id=session_id,
         namespace=namespace,
-        region=REGION,      
+        region=REGION,
     )
 
-    
     model = BedrockModel(
         model_id="us.amazon.nova-2-lite-v1:0",
         region_name=REGION,
@@ -191,11 +180,9 @@ def invoke_agent(payload, context):
         tools=[ask_kb_specialist, ask_math_specialist, *memory_provider.tools],
     )
 
-    # ── 5. Invoke agent ───────────────────────────────────────────────────────
     response      = agent(prompt)
     response_text = str(response)
 
-    # ── 6. Persist turn to STM → feeds async LTM extraction pipeline ─────────
     try:
         memory_client.create_event(
             memory_id=MEMORY_ID,

@@ -1,24 +1,26 @@
-"""A2A-over-AgentCore client helpers.
-
-Exports:
-  SigV4HttpxAuth — httpx.Auth subclass that signs requests with
-    AWS SigV4 for service=bedrock-agentcore.
-  make_a2a_tool — factory returning a Strands @tool that forwards
-    a single text query to a remote A2A agent and returns the reply
-    text. Auto-selects signed vs. plain transport by URL scheme.
-"""
+"""A2A-over-AgentCore client helpers."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Generator
 from uuid import uuid4
 
 import boto3
 import httpx
+from a2a.client import ClientConfig, ClientFactory
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+    Message,
+    Part,
+    Role,
+    TextPart,
+)
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+from strands import tool
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +60,6 @@ class SigV4HttpxAuth(httpx.Auth):
         yield request
 
 
-from a2a.client import ClientConfig, ClientFactory
-from a2a.types import (
-    AgentCapabilities,
-    AgentCard,
-    AgentSkill,
-    Message,
-    Part,
-    Role,
-    TextPart,
-)
-from strands import tool
-
-
 def _stub_agent_card(url: str, name: str, description: str) -> AgentCard:
     """Hand-built AgentCard — skips GET /.well-known/... discovery.
 
@@ -98,8 +87,6 @@ def _stub_agent_card(url: str, name: str, description: str) -> AgentCard:
 
 
 def _extract_text(event: Any) -> str:
-    """Pull text out of an a2a ClientEvent: Message, (Task, UpdateEvent),
-    or fallback."""
     if isinstance(event, Message):
         parts = event.parts or []
         return "\n".join(
