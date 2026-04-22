@@ -22,10 +22,11 @@ import logging
 
 from bedrock_agentcore import BedrockAgentCoreApp
 from bedrock_agentcore.memory import MemoryClient
-from strands_tools import retrieve
 from strands_tools.agent_core_memory import AgentCoreMemoryToolProvider
 from strands.models import BedrockModel
 from strands import Agent
+
+from shared.a2a_tools import make_a2a_tool
 
 
 os.environ.setdefault("KNOWLEDGE_BASE_ID", "GLSSIBXSBD")
@@ -34,6 +35,34 @@ os.environ.setdefault("MIN_SCORE", "0.3")
 
 REGION    = os.environ.get("AWS_REGION", "us-east-1")
 MEMORY_ID = os.environ.get("MEMORY_ID", "alpha_memory-cQMHNRHuNG")
+
+KB_SPECIALIST_URL   = os.environ.get("KB_SPECIALIST_URL",   "http://127.0.0.1:9000/")
+MATH_SPECIALIST_URL = os.environ.get("MATH_SPECIALIST_URL", "http://127.0.0.1:9001/")
+
+ask_kb_specialist = make_a2a_tool(
+    tool_name="ask_kb_specialist",
+    tool_description=(
+        "Delegate factual questions to the KB specialist. Use this "
+        "whenever the user is asking for information that could be in "
+        "a documented knowledge base."
+    ),
+    remote_name="kb_specialist",
+    remote_description="KB-grounded factual Q&A",
+    runtime_url=KB_SPECIALIST_URL,
+    region=REGION,
+)
+
+ask_math_specialist = make_a2a_tool(
+    tool_name="ask_math_specialist",
+    tool_description=(
+        "Delegate arithmetic or math expression evaluation to the math "
+        "specialist. Use this whenever a numeric calculation is required."
+    ),
+    remote_name="math_specialist",
+    remote_description="arithmetic & symbolic math",
+    runtime_url=MATH_SPECIALIST_URL,
+    region=REGION,
+)
 
 
 # Pattern: actor/{actorId}/sessions 
@@ -140,11 +169,17 @@ def invoke_agent(payload, context):
     )
 
     system_prompt = (
-        "You are a helpful assistant with access to a knowledge base and persistent memory.\n\n"
-        "Memory tools available:\n"
-        "  • agent_core_memory(action='record', content='...')  — save an important fact about the user\n"
-        "  • agent_core_memory(action='retrieve', query='...')  — search past memories\n\n"
+        "You are a coordinator agent with persistent memory and two remote "
+        "specialists you can delegate to.\n\n"
+        "Delegation tools:\n"
+        "  • ask_kb_specialist(query)   — factual, KB-grounded questions\n"
+        "  • ask_math_specialist(query) — arithmetic / symbolic math\n\n"
+        "Memory tools:\n"
+        "  • agent_core_memory(action='record', content='...') — save a fact about the user\n"
+        "  • agent_core_memory(action='retrieve', query='...') — search past memories\n\n"
         "Guidelines:\n"
+        "  - Route factual lookups to ask_kb_specialist; do not try to answer them yourself.\n"
+        "  - Route any calculation to ask_math_specialist.\n"
         "  - When the user shares personal info (name, preferences, goals), record it immediately.\n"
         "  - When a question seems to require past context, retrieve first before answering.\n"
         f"{ltm_context}{stm_history}"
@@ -153,7 +188,7 @@ def invoke_agent(payload, context):
     agent = Agent(
         system_prompt=system_prompt,
         model=model,
-        tools=[retrieve, *memory_provider.tools],
+        tools=[ask_kb_specialist, ask_math_specialist, *memory_provider.tools],
     )
 
     # ── 5. Invoke agent ───────────────────────────────────────────────────────
